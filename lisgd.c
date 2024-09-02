@@ -10,6 +10,7 @@
 #include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
+#include <pthread.h>
 #ifdef WITH_X11
 # include <X11/Xlib.h>
 #endif
@@ -398,71 +399,133 @@ touchup(struct libinput_event *e)
 	}
 }
 
+#ifdef WITH_WAYLAND
+void *handle_wayland_events(void *arg) {
+    while (running) {
+        if (wl_display_dispatch(wl_display) == -1) {
+            fprintf(stderr, "Error dispatching Wayland events\n");
+            running = 0;
+            break;
+        }
+    }
+    return NULL;
+}
+
 void
-run(void)
+reorient_gestures(int new_orientation)
 {
-	int i;
-	struct libinput *li;
-	struct libinput_event *event;
-	struct libinput_device *d;
-	int selectresult;
-	fd_set fdset;
+		int rotation_diff = (new_orientation - current_orientation + 4) % 4;
+        for (int i = 0; i < gestsarrlen; i++) {
+			gestsarr[i].swipe = swipereorient(gestsarr[i].swipe, rotation_diff);
+			gestsarr[i].edge = edgereorient(gestsarr[i].edge, rotation_diff);
+        }
 
-	const static struct libinput_interface interface = {
-		.open_restricted = libinputopenrestricted,
-		.close_restricted = libinputcloserestricted,
-	};
+		current_orientation = new_orientation;
 
-	if ((li = libinput_path_create_context(&interface, NULL)) == NULL)
-		die("Failed to initialize context");
+        if (verbose) {
+            fprintf(stderr, "Gestures reoriented for new orientation: %d (rotated by %d * 90 degress)\n", new_orientation, rotation_diff);
+        }
+}
+#endif
 
-	if ((d = libinput_path_add_device(li, device)) == NULL) {
-		die("Couldn't bind event from dev filesystem");
-	} else if (LIBINPUT_CONFIG_STATUS_SUCCESS != libinput_device_config_send_events_set_mode(
-		d, LIBINPUT_CONFIG_SEND_EVENTS_ENABLED
-	)) {
-		die("Couldn't set mode to capture events");
-	}
+void run(void)
+{
+    int i;
+    struct libinput *li;
+    struct libinput_event *event;
+    struct libinput_device *d;
+    int selectresult;
+    fd_set fdset;
 
-	// E.g. initially invalidate every slot
-	for (i = 0; i < MAXSLOTS; i++) {
-		xend[i] = NOMOTION;
-		yend[i] = NOMOTION;
-		xstart[i] = NOMOTION;
-		ystart[i] = NOMOTION;
-	}
+    const static struct libinput_interface interface = {
+        .open_restricted = libinputopenrestricted,
+        .close_restricted = libinputcloserestricted,
+    };
 
-	FD_ZERO(&fdset);
-	FD_SET(libinput_get_fd(li), &fdset);
-	for (;;) {
-		selectresult = select(FD_SETSIZE, &fdset, NULL, NULL, NULL);
-		if (selectresult == -1) {
-			die("Can't select on device node?");
-		} else {
-			libinput_dispatch(li);
-			while ((event = libinput_get_event(li)) != NULL) {
-				switch(libinput_event_get_type(event)) {
-					case LIBINPUT_EVENT_TOUCH_DOWN: touchdown(event); break;
-					case LIBINPUT_EVENT_TOUCH_UP: touchup(event); break;
-					case LIBINPUT_EVENT_TOUCH_MOTION: touchmotion(event); break;
-				}
-				libinput_event_destroy(event);
-			}
-		}
-	}
-	libinput_unref(li);
+    if ((li = libinput_path_create_context(&interface, NULL)) == NULL)
+        die("Failed to initialize context");
+
+    if ((d = libinput_path_add_device(li, device)) == NULL) {
+        die("Couldn&#x27;t bind event from dev filesystem");
+    } else if (LIBINPUT_CONFIG_STATUS_SUCCESS != libinput_device_config_send_events_set_mode(
+        d, LIBINPUT_CONFIG_SEND_EVENTS_ENABLED
+    )) {
+        die("Couldn&#x27;t set mode to capture events");
+    }
+
+    // Initialize slots
+    for (i = 0; i < MAXSLOTS; i++) {
+        xend[i] = NOMOTION;
+        yend[i] = NOMOTION;
+        xstart[i] = NOMOTION;
+        ystart[i] = NOMOTION;
+    }
+
+    FD_ZERO(&fdset);
+    FD_SET(libinput_get_fd(li), &fdset);
+
+#ifdef WITH_WAYLAND
+    if (wayland_fd != -1) {
+        FD_SET(wayland_fd, &fdset);
+    }
+
+    while (running) {
+        selectresult = select(FD_SETSIZE, &fdset, NULL, NULL, NULL);
+        if (selectresult == -1) {
+            die("Can't select on device node?");
+        } else {
+            if (FD_ISSET(libinput_get_fd(li), &fdset)) {
+                libinput_dispatch(li);
+                while ((event = libinput_get_event(li)) != NULL) {
+                    switch(libinput_event_get_type(event)) {
+                        case LIBINPUT_EVENT_TOUCH_DOWN: touchdown(event); break;
+                        case LIBINPUT_EVENT_TOUCH_UP: touchup(event); break;
+                        case LIBINPUT_EVENT_TOUCH_MOTION: touchmotion(event); break;
+                    }
+                    libinput_event_destroy(event);
+                }
+            }
+            
+            // Handle Wayland events if the fd is set
+            if (wayland_fd != -1 && FD_ISSET(wayland_fd, &fdset)) {
+                wl_display_dispatch(wl_display);
+            }
+        }
+    }
+#endif
+    libinput_unref(li);
 }
 
 #ifdef WITH_WAYLAND
 static void
-display_handle_geometry(void *data, struct wl_output *wl_output, int x, int y, int physical_width, int physical_height, int subpixel, const char *make, const char *model, int transform)
+display_handle_geometry(void *data, struct wl_output *wl_output, int x, int y,
+                        int physical_width, int physical_height, int subpixel,
+                        const char *make, const char *model, int transform)
 {
-	orientation = transform;
-	if (orientation == 1) {
-		orientation = 3;
-	} else if (orientation == 3) {
-		orientation = 1;
-	}
+    int new_orientation;
+    switch(transform) {
+        case WL_OUTPUT_TRANSFORM_NORMAL:
+            new_orientation = 0;
+            break;
+        case WL_OUTPUT_TRANSFORM_90:
+            new_orientation = 3;
+            break;
+        case WL_OUTPUT_TRANSFORM_180:
+            new_orientation = 2;
+            break;
+        case WL_OUTPUT_TRANSFORM_270:
+            new_orientation = 1;
+            break;
+        default:
+            new_orientation = 0;
+            break;
+    }
+
+    if (verbose) {
+        fprintf(stderr, "Wayland Orientation Detected: %d\n", new_orientation);
+    }
+
+	reorient_gestures(new_orientation);
 }
 
 static void
@@ -544,9 +607,6 @@ main(int argc, char *argv[])
 		} else if (!strcmp(argv[i], "-m")) {
 			if (i == argc - 1) die("option -m expects a value");
 			timeoutms = atoi(argv[++i]);
-		} else if (!strcmp(argv[i], "-o")) {
-			if (i == argc - 1) die("option -o expects a value");
-			orientation = atoi(argv[++i]);
 		} else if (!strcmp(argv[i], "-h")) {
 			if (i == argc - 1) die("option -h expects a value");
 			screenheight = atoi(argv[++i]);
@@ -616,6 +676,8 @@ main(int argc, char *argv[])
 		}
 	}
 
+
+
 	// Get display size (if not set with -w/-h)
 	if (screenwidth == 0 && screenheight == 0) {
 		if (getenv("WAYLAND_DISPLAY")) {
@@ -624,7 +686,13 @@ main(int argc, char *argv[])
 			wl_registry = wl_display_get_registry(wl_display);
 			wl_registry_add_listener(wl_registry, &wl_registry_listener, NULL);
 			wl_display_roundtrip(wl_display);
-			wl_display_dispatch(wl_display);
+			wayland_fd = wl_display_get_fd(wl_display);
+			if (wayland_fd == -1 ) {
+				die("Failed to get Wayland display file descriptor");
+			}
+        if (pthread_create(&wayland_thread, NULL, handle_wayland_events, NULL) != 0) {
+            die("Failed to create Wayland event handling thread");
+        }
 #else
 			die("Wayland environment detected but support for it is not enabled");
 #endif
@@ -670,5 +738,15 @@ main(int argc, char *argv[])
 	}
 
 	run();
+
+#ifdef WITH_WAYLAND
+	running = 0;
+    if (wayland_fd != -1) {
+        pthread_join(wayland_thread, NULL);
+        wl_display_disconnect(wl_display);
+    }
+    pthread_mutex_destroy(&orientation_mutex);
+#endif
+
 	return 0;
 }
