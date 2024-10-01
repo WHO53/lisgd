@@ -64,12 +64,21 @@ enum {
 typedef int ActMode;
 
 typedef struct {
+	void (*func)(void *arg);
+	void *arg;
+} CustomFunction;
+
+typedef struct {
 	int nfswipe;
 	Swipe swipe;
 	Edge edge;
 	Distance distance;
 	ActMode actmode;
-	char *command;
+	union {
+		char *command;
+		CustomFunction custom_func;
+	} action;
+	int is_custom_func;
 } Gesture;
 
 /* Config */
@@ -233,8 +242,12 @@ gestureexecute(Swipe swipe, int nfingers, Edge edge, Distance distance, ActMode 
 			   )
 			&& (actmode == ActModeReleased || gestsarr[i].actmode == actmode)
 			) {
-			if (verbose) fprintf(stderr, "Execute %s\n", gestsarr[i].command);
-			system(gestsarr[i].command);
+			if (gestsarr[i].is_custom_func) {
+			   gestsarr[i].action.custom_func.func(gestsarr[i].action.custom_func.func);
+			} else {
+			if (verbose) fprintf(stderr, "Execute %s\n", gestsarr[i].action.command);
+			   system(gestsarr[i].action.command);
+			}
 			return 1; //execute first match only
 		}
 	}
@@ -577,6 +590,16 @@ wl_registry_listener wl_registry_listener = {
 };
 #endif
 
+static void example_custom_func () {
+	system("notify-send Working!!!!");
+};
+
+Gesture gestures[] = {
+	/* nfingers  gesturetype  command */
+	{ 1,         SwipeLR,     EdgeLeft, DistanceAny, ActModeReleased, { .custom_func ={ example_custom_func, NULL } }, 1 },
+	{ 2,         SwipeLR,     EdgeLeft, DistanceAny, ActModeReleased, "notify-send system", 0 },
+};
+
 int
 main(int argc, char *argv[])
 {
@@ -663,11 +686,11 @@ main(int argc, char *argv[])
 							gestsarr[gestsarrlen-1].actmode = ActModeReleased;
 							if (strcmp(gestpt, "R") != 0) {
 								//for backward compatibility, allow fourth field to hold command
-								gestsarr[gestsarrlen - 1].command = gestpt;
+								gestsarr[gestsarrlen - 1].action.command = gestpt;
 							}
 						}
 						break;
-					case 5: gestsarr[gestsarrlen - 1].command = gestpt; break;
+					case 5: gestsarr[gestsarrlen - 1].action.command = gestpt; break;
 				}
 			}
 		} else {
