@@ -590,13 +590,13 @@ wl_registry_listener wl_registry_listener = {
 };
 #endif
 
-static void example_custom_func () {
+/* static void example_custom_func () {
 	system("notify-send Working!!!!");
-};
+}; */
 
 Gesture gestures[] = {
 	/* nfingers  gesturetype  command */
-	{ 1,         SwipeLR,     EdgeLeft, DistanceAny, ActModeReleased, { .custom_func ={ example_custom_func, NULL } }, 1 },
+	/* { 1,         SwipeLR,     EdgeLeft, DistanceAny, ActModeReleased, { .custom_func ={ example_custom_func, NULL } }, 1 }, */
 	{ 2,         SwipeLR,     EdgeLeft, DistanceAny, ActModeReleased, "notify-send system", 0 },
 };
 
