@@ -81,7 +81,22 @@ typedef struct {
 	int is_custom_func;
 } Gesture;
 
-/* Config */
+unsigned int distancethreshold = 125;
+unsigned int distancethreshold_pressed = 60;
+unsigned int degreesleniency = 15;
+unsigned int timeoutms = 800;
+unsigned int orientation = 0;
+unsigned int wayland_fd = -1;
+pthread_t wayland_thread;
+unsigned int running = 1;
+unsigned int current_orientation = 0;
+pthread_mutex_t orientation_mutex = PTHREAD_MUTEX_INITIALIZER;
+unsigned int verbose = 0;
+double edgesizeleft = 50.0;
+double edgesizetop = 50.0;
+double edgesizeright = 50.0;
+double edgesizebottom = 50.0;
+double edgessizecaling = 1.0;
 #include "config.h"
 
 /* Globals */
@@ -593,12 +608,6 @@ wl_registry_listener wl_registry_listener = {
 /* static void example_custom_func () {
 	system("notify-send Working!!!!");
 }; */
-
-Gesture gestures[] = {
-	/* nfingers  gesturetype  command */
-	/* { 1,         SwipeLR,     EdgeLeft, DistanceAny, ActModeReleased, { .custom_func ={ example_custom_func, NULL } }, 1 }, */
-	{ 2,         SwipeLR,     EdgeLeft, DistanceAny, ActModeReleased, "notify-send system", 0 },
-};
 
 int
 main(int argc, char *argv[])
